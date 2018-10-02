@@ -12,6 +12,8 @@ import org.hibernate.SessionFactory;
 import org.hibernate.boot.registry.StandardServiceRegistryBuilder;
 import org.hibernate.cfg.Configuration;
 
+import example.db.DBComment;
+import example.db.DBComment.FlatComment;
 import example.db.DBPost;
 import example.db.DBPost.FlatPost;
 import example.db.DBUser;
@@ -68,14 +70,14 @@ public class DB {
 		return flatUser; 
 	}
 	
-	/** 
-	 * Get a DBUser from the user table by email (use this code to query against non-primary-key columns
-	 * @param email
-	 * @return
-	 * @throws DBNotFoundException 
+
+	/**
+	 * 
+	 * @param session
+	 * @param emailAddress
+	 * @return null if not found
 	 */
-	public static FlatUser getUserByEmail(String emailAddress) throws DBNotFoundException {
-		Session session = sessionFactory.openSession();
+	private static DBUser getUserByEmail(Session session, String emailAddress) {
 		
 		CriteriaBuilder cb = session.getCriteriaBuilder(); // CriteriaBuilder is used to build criteria which will be used to query the database
 		
@@ -85,17 +87,28 @@ public class DB {
 		
 		List<DBUser> result = session.createQuery(query).list(); // get the results of the query as a list
 		
-		// if you know for certain that the query will return exactly one result, you can use uniqueResult() instead as a convenience method
-		// it will break if the query returns no results or more than one result
-		//DBUser result = session.createQuery(query).uniqueResult();
+		if (result.size() == 0) return null;
+		else return result.get(0); 
+	}
+	
+	/** 
+	 * Get a DBUser from the user table by email (use this code to query against non-primary-key columns
+	 * @param email
+	 * @return
+	 * @throws DBNotFoundException 
+	 */
+	public static FlatUser getUserByEmail(String emailAddress) throws DBNotFoundException {
+		Session session = sessionFactory.openSession();
 		
-		if (result.size() == 0) throw new DBNotFoundException();
+		DBUser dbUser = getUserByEmail(session, emailAddress);
 		
-		FlatUser user = result.get(0).flatten(); // get the user from the result list (call flatten() before closing session)
+		if (dbUser == null) throw new DBNotFoundException();
+		
+		FlatUser user = dbUser.flatten(); // get the user from the result list (call flatten() before closing session)
 		session.close(); // remember to close the session!
 		return user;
 	}
-	
+		
 	public static void addUser(String emailAddress, String password, String displayName) throws DBCollisionException {
 		Session session = sessionFactory.openSession();
 		DBUser user = new DBUser(); // create DBUser object from scratch
@@ -104,6 +117,7 @@ public class DB {
 		user.setEmail(emailAddress);
 		user.setPassword(password);
 		user.setName(displayName);
+		user.setBgColor(0xFFFFFF);
 		user.setTimestamp(System.currentTimeMillis());
 		
 		session.beginTransaction(); // you must begin a transaction when modifying the database
@@ -135,6 +149,7 @@ public class DB {
 		return list;
 	}
 	
+	//Retrieve post based on user ID
 	public static FlatPost getPostById(long id) throws DBNotFoundException {
 		Session session = sessionFactory.openSession();
 		
@@ -149,6 +164,7 @@ public class DB {
 		return post;
 	}
 	
+	//add a post with a Title, Body, Message
 	public static FlatPost addPost(String title, String body, String email, String password) throws DBNotFoundException, DBRollbackException {
 		Session session = sessionFactory.openSession();
 		
@@ -180,6 +196,7 @@ public class DB {
 		return ret;
 	}
 	
+	//retrieve Posts based on the athor of the post
 	public static List<FlatPost> getPostsByUserId(long id) {
 		Session session = sessionFactory.openSession();
 		
@@ -189,6 +206,141 @@ public class DB {
 		session.close(); 
 		return list;
 	}
+	
+	/**
+	 * 
+	 * @param email
+	 * @param password
+	 * @param color
+	 * @return user's ID 
+	 * @throws DBIncorrectPasswordException
+	 * @throws DBRollbackException
+	 * @throws DBNotFoundException
+	 */
+	public static long setBgColor(String email, String password, int color) throws DBIncorrectPasswordException, DBRollbackException, DBNotFoundException {
+		Session session = sessionFactory.openSession();
+		DBUser user = DB.getUserByEmail(session, email);
+		
+		if (user == null) throw new DBNotFoundException();
+		
+		if (!user.getPassword().equals(password)) throw new DBIncorrectPasswordException();
+		
+		long userID = user.getId();
+		
+		user.setBgColor(color);
+		
+		session.beginTransaction();
+		session.merge(user);
+		try {
+			session.getTransaction().commit();
+		} catch (Exception e) {
+			session.getTransaction().rollback();
+			throw new DBRollbackException();
+		} finally {
+			session.close();
+		}
+		
+		return userID;
+	}
+	
+	public static  List<FlatComment> getAllComments() {
+		Session session = sessionFactory.openSession();
+		
+		CriteriaBuilder cb = session.getCriteriaBuilder(); 
+		
+		CriteriaQuery<DBComment> query = cb.createQuery(DBComment.class); 
+		Root<DBComment> root = query.from(DBComment.class); 
+		query.select(root); 
+		List<DBComment> result = session.createQuery(query).list();
+		
+		List<FlatComment> list = result.stream().map(comment->comment.flatten()).collect(Collectors.toList()); // map DBComment to FlatComment, again, make sure to call flatten() before closing the session
+		session.close(); 
+		return list;
+	}
+	
+	
+	
+	
+	public static FlatComment getCommentById(long id) throws DBNotFoundException {
+		Session session = sessionFactory.openSession();
+		
+		DBComment result = session.get(DBComment.class, id);
+		
+		if (result == null) throw new DBNotFoundException();
+		
+		FlatComment comment = result.flatten();
+		
+		session.close();
+		
+		return comment;
+	}
+	
+	
+	
+	
+	
+	
+	public static FlatComment addComment(String body, String email, String password, long postID) throws DBNotFoundException, DBRollbackException, DBIncorrectPasswordException{
+		Session session = sessionFactory.openSession();
+		
+		DBUser user = session.createQuery("from DBUser user where user.email='" + email + "'", DBUser.class).uniqueResult();
+		if (user==null) throw new DBNotFoundException();
+		
+		if (!user.getPassword().equals(password)) throw new DBIncorrectPasswordException();
+		
+		DBPost post = session.createQuery("from DBPost post where post.id="+postID, DBPost.class).uniqueResult();
+		
+		DBComment comment = new DBComment();
+		comment.setAuthor(user);
+		comment.setBody(body);
+		comment.setDate(System.currentTimeMillis());
+		comment.setPost(post);
+		
+		session.beginTransaction();
+		long id;
+		try {
+			id = (long) session.save(comment);
+			session.getTransaction().commit();
+		} catch (Exception e) {
+			session.getTransaction().rollback();
+			throw new DBRollbackException();
+		}
+		
+		comment.setId(id);
+		
+		FlatComment ret = new FlatComment(comment);
+		
+		session.close();
+		
+		return ret;
+	}
+	
+	
+	
+	
+	public static List<FlatComment> getCommentsByUserId(long id) {
+		Session session = sessionFactory.openSession();
+		
+		List<DBComment> result = session.createQuery("from DBComment comment where comment.author.id="+id, DBComment.class).list(); 
+		
+		List<FlatComment> list = result.stream().map(comment->comment.flatten()).collect(Collectors.toList());
+		session.close(); 
+		return list;
+	}
+	
+	/**
+	 * Returns all comments on post with id
+	 * @param postID id of the post for which to get comments
+	 * @return
+	 */
+	public static List<FlatComment> getCommentsOnPost(long postID) {
+		Session session = sessionFactory.openSession();
+		List<DBComment> list = session.createQuery("from DBComment comment where comment.post.id=" + postID, DBComment.class).list();
+		return list.stream().map(FlatComment::new).collect(Collectors.toList());
+	}
+	
+	
+	/******************************* Exceptions *******************************/
 	
 	public static class DBNotFoundException extends Exception {
 		private static final long serialVersionUID = -3413135035628577683L;
@@ -211,6 +363,14 @@ public class DB {
 
 		public DBRollbackException() {
 			super("db commit failed, was rolled back");
+		}
+	}
+	
+	public static class DBIncorrectPasswordException extends Exception {
+		private static final long serialVersionUID = -3413135035628577683L;
+
+		public DBIncorrectPasswordException() {
+			super("password incorrect, no changes made");
 		}
 	}
 }

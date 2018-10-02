@@ -15,8 +15,10 @@ import javax.ws.rs.PathParam;
 import javax.ws.rs.core.Response;
 
 import example.DB.DBCollisionException;
+import example.DB.DBIncorrectPasswordException;
 import example.DB.DBNotFoundException;
 import example.DB.DBRollbackException;
+import example.db.DBComment.FlatComment;
 import example.db.DBPost.FlatPost;
 import example.db.DBUser.FlatUser;
 
@@ -48,11 +50,22 @@ public class API {
 			return Response.ok("Not found: " + id).build();
 		}
 		
+		StringBuilder sb = new StringBuilder();
+		List<FlatComment> list = DB.getCommentsOnPost(id);
+		
+		for (FlatComment com : list) {
+			sb.append("<p>" + com.body + "<br/><br/>\n");
+			sb.append("Posted by " + com.author.name + " on " + new Date(com.date) + "\n");
+		}
+
+		
 		return Response.ok(page
 				.replace("$BLOGPOSTTITLE", post.title)
 				.replace("$BLOGPOSTBODY", post.body)
 				.replace("$BLOGPOSTUSERID", Long.toString(post.author.id))
 				.replace("$BLOGPOSTUSERNAME", post.author.name)
+				.replace("$BLOGCOMMENTS", sb.toString())
+				.replace("$POSTID", Long.toString(id))
 				.replace("$BLOGPOSTDATE", new Date(post.date).toString())
 			).build();
 	}
@@ -77,8 +90,13 @@ public class API {
 			sb.append("<br/>" + System.lineSeparator());
 		}
 		
+		StringBuilder bg = new StringBuilder();
+		bg.append(Integer.toString(user.bgColor, 16));
+		while (bg.length() < 6) bg.insert(0, "0");
+		
 		return Response.ok(page
 				.replace("$BLOGUSERNAME", user.name)
+				.replace("$BGCOLOR" , bg.toString())
 				.replace("$BLOGPOSTS", sb.toString())
 			).build();
 	}
@@ -101,6 +119,32 @@ public class API {
 		return Response.seeOther(URI.create("/")).build(); // redirect to homepage on success
 	}
 	
+	@POST
+	@Path("/changebgcolor") 
+	public static Response changebgColor(@FormParam("email") String email, @FormParam("password") String password, @FormParam("bgcolor") String bgColor) {
+		int intColor;
+		try {
+			intColor = Integer.parseInt(bgColor, 16);
+		} catch (NumberFormatException e) {
+			return Response.ok("Not a hex number: " + bgColor).build();
+		}
+		
+		long userID;
+		
+		try {
+			userID = DB.setBgColor(email, password, intColor);
+		} catch (DBIncorrectPasswordException e) {
+			return Response.ok("Incorrect password").build();
+		} catch (DBRollbackException e) {
+			return Response.ok("Rollback exception (should never happen)").build();
+		} catch (DBNotFoundException e) {
+			return Response.ok("Email address not found: " + email).build();
+		}
+		
+		return Response.seeOther(URI.create("/getuser/" + userID)).build(); // redirect to homepage on success
+	}
+	
+	
 	@GET
 	@Path("/createpost")
 	public static Response createPostGet() {
@@ -121,6 +165,22 @@ public class API {
 		
 		return Response.seeOther(URI.create("/getpost/" + post.id)).build(); // redirect to the new post
 	}
+	
+	@POST
+	@Path("/addcomment/{id}")
+	public static Response addComment(@PathParam("id") long id, @FormParam("email") String email, @FormParam("password") String password, @FormParam("body") String body) {
+		try {
+			DB.addComment(body, email, password, id);
+		} catch (DBNotFoundException e) {
+			return Response.ok("Email not found").build();
+		} catch (DBRollbackException e) {
+			return Response.ok("Rollback (should never happen)").build();
+		} catch (DBIncorrectPasswordException e) {
+			return Response.ok("Incorrect password").build();
+		}
+		return Response.seeOther(URI.create("/getpost/"+id)).build();
+	}
+	
 	
 	/**
 	 * Convert a text file in src/main/resources to a String
